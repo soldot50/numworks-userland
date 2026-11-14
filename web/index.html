@@ -49,18 +49,32 @@ async function writeAt(addr,data){
   log("Écriture terminée à 0x"+addr.toString(16))}
 async function leave(addr){try{await cmd(0x21,addr);await dev.controlTransferOut(REQ(1,0));await getStatus()}catch(e){}
   log("Saut vers 0x"+addr.toString(16)+" : la calculatrice redémarre sur ton userland.")}
+async function descStr(idx){ if(!idx) return ""; try{
+  const r=await dev.controlTransferIn({requestType:'standard',recipient:'device',request:6,value:(3<<8)|idx,index:0x0409},255);
+  const d=new Uint8Array(r.data.buffer);return new TextDecoder('utf-16le').decode(d.slice(2,d[0]))}catch(e){return ""}}
+async function readAlts(){const out=[];
+  try{const r=await dev.controlTransferIn({requestType:'standard',recipient:'device',request:6,value:(2<<8),index:0},1024);
+    const d=new Uint8Array(r.data.buffer);let i=0;
+    while(i<d.length&&d[i]>0){if(d[i+1]===4&&d[i+2]===0)out.push({n:d[i+3],name:await descStr(d[i+8])});i+=d[i]}
+  }catch(e){log("Descripteurs illisibles: "+e.message)}return out}
 document.getElementById('conn').onclick=async()=>{try{
   dev=await navigator.usb.requestDevice({filters:[{vendorId:0x0483,productId:0xa291},{vendorId:0x0483,productId:0xdf11}]});
   await dev.open();if(!dev.configuration)await dev.selectConfiguration(1);await dev.claimInterface(0);
   alts=dev.configuration.interfaces[0].alternates.map(a=>({n:a.alternateSetting,name:a.interfaceName||""}));
-  alts.forEach(a=>log("Alt "+a.n+": "+a.name));
-  slot=alts.some(a=>a.name.includes("0x90000000"))?'A':'B';
-  log("Emplacement inactif détecté : "+slot+" → utilise userland."+slot+".dfu");
+  if(alts.every(a=>!a.name)){log("Noms vides, lecture des descripteurs USB...");const r=await readAlts();if(r.length)alts=r}
+  alts.forEach(a=>log("Alt "+a.n+": "+(a.name||"(vide)")));
+  if(alts.every(a=>!a.name)){
+    log("ATTENTION: noms illisibles, carte mémoire supposée (alt 0 = flash externe 0x90000000).");
+    alts=alts.map(a=>a.n===0?{n:0,name:"@External/0x90000000/08*004Kg,01*032Kg,127*064Kg"}:a);
+    slot=null;log("Emplacement inconnu : l'installation sera refusée sauf choix manuel confirmé.")}
+  else{slot=alts.some(a=>a.name.includes("0x90000000"))?'A':'B';
+    log("Emplacement inactif détecté : "+slot+" → utilise userland."+slot+".dfu")}
   document.getElementById('st').textContent="connectée ✔"}catch(e){log("Erreur: "+e.message)}};
 document.getElementById('flash').onclick=async()=>{try{
   if(!dev)return log("Connecte d'abord la calculatrice");
   const f=document.getElementById('dfu').files[0];if(!f)return log("Choisis un .dfu");
-  let s=document.getElementById('slot').value;if(s==='auto')s=slot;
+  let s=document.getElementById('slot').value;if(s==='auto')s=slot;if(!s)return log("Emplacement inconnu : installation annulée par sécurité (choisir l'emplacement actif écraserait le système en cours).");
+  if(slot===null&&!confirm("Je n'ai pas pu vérifier quel emplacement est libre. Si tu choisis l'emplacement ACTIF, tu risques d'écraser le firmware en cours. Continuer ?"))return;
   if(!f.name.includes("."+s+"."))if(!confirm("Le fichier ne semble pas être celui de l'emplacement "+s+". Continuer ?"))return;
   const start=s==='A'?0x90010000:0x90410000;
   const b=new Uint8Array(await f.arrayBuffer()),v=new DataView(b.buffer);
