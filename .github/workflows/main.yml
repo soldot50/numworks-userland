@@ -1,0 +1,67 @@
+name: Build Userland
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version d Epsilon de ta calculatrice (Parametres > A propos)"
+        default: "26.4.0"
+        required: true
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    container: debian:12
+    steps:
+      - name: Dependances
+        run: |
+          apt-get update
+          apt-get install -y build-essential git imagemagick libx11-dev libxext-dev libfreetype6-dev libpng-dev libjpeg-dev libusb-1.0-0-dev pkg-config python3 python3-pip gcc-arm-none-eabi binutils-arm-none-eabi inkscape librsvg2-bin
+          pip3 install --break-system-packages lz4 pypng stringcase pyelftools
+          arm-none-eabi-gcc --version | head -1
+      - uses: actions/checkout@v4
+      - name: Code d'Epsilon
+        run: git clone --depth 1 https://github.com/numworks/epsilon.git firmware
+      - name: Theme
+        run: |
+          python3 - <<'PY'
+          import json, re, pathlib
+          theme = json.load(open("theme/userland_theme.json"))["palette"]
+          n = 0
+          for f in list(pathlib.Path("firmware").rglob("palette.h")) + list(pathlib.Path("firmware").rglob("palette.cpp")):
+              s = f.read_text()
+              for name, col in theme.items():
+                  pat = re.compile(r'(\b' + re.escape(name) + r'\b\s*=\s*KDColor::RGB24\(0x)([0-9A-Fa-f]{6})(\))')
+                  s, k = pat.subn(lambda m: m.group(1) + col.lstrip('#').upper() + m.group(3), s)
+                  n += k
+              f.write_text(s)
+          print(n, "couleur(s) modifiee(s)")
+          PY
+      - name: Compilation
+        env:
+          V: ${{ inputs.version }}
+        run: |
+          ls firmware
+          make -C firmware/epsilon clean PLATFORM=n0120 || true
+          make -C firmware/epsilon -j4 PLATFORM=n0120 EPSILON_VERSION=$V userland.A.dfu
+          make -C firmware/epsilon -j4 PLATFORM=n0120 EPSILON_VERSION=$V userland.B.dfu
+      - name: Rassembler
+        run: |
+          mkdir -p out
+          find firmware -name "userland.*.dfu" -exec cp {} out/ \;
+          ls -l out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: userland-n0120
+          path: out/*
+  site:
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+      - uses: actions/deploy-pages@v4
