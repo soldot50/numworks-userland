@@ -1,0 +1,11 @@
+{
+  "_comment": "Noms = constantes de Palette:: dans escher/src/palette.cpp (peuvent varier selon la version).",
+  "palette": {
+    "YellowDark": "#FFB734",
+    "YellowLight": "#FFCC7B",
+    "PrimaryText": "#242424",
+    "SecondaryText": "#999999",
+    "BackgroundHard": "#F6F6F6",
+    "BackgroundApps": "#FFFFFF"
+  }
+}

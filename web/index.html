@@ -1,0 +1,73 @@
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NumWorks Userland — Installateur N0120</title>
+<style>
+body{font-family:system-ui;max-width:720px;margin:2rem auto;padding:0 1rem;background:#fff8e8;color:#242424}
+h1{color:#d98e00}section{background:#fff;border-radius:14px;padding:1rem 1.2rem;margin:1rem 0;box-shadow:0 2px 8px #0001}
+button{background:#ffb734;border:0;border-radius:8px;padding:.6rem 1rem;font-weight:700;cursor:pointer}
+input,select{padding:.4rem;margin:.3rem 0}pre{background:#111;color:#8f8;padding:.8rem;border-radius:8px;height:200px;overflow:auto}
+</style></head><body>
+<h1>NumWorks Userland</h1>
+<section><h3>1. Connexion</h3>
+<p>Branche la calculatrice (allumée, système officiel) : elle doit afficher « La calculatrice est connectée ». Ferme les onglets my.numworks.com. Chrome ou Edge uniquement.</p>
+<button id="conn">Connecter</button> <span id="st">non connectée</span></section>
+<section><h3>2. Installer</h3>
+<p>Emplacement : <select id="slot"><option value="auto">Automatique</option><option value="A">A (0x90010000)</option><option value="B">B (0x90410000)</option></select></p>
+<p>Choisis le fichier correspondant : <code>userland.A.dfu</code> ou <code>userland.B.dfu</code> (l'emplacement détecté s'affiche dans le journal).</p>
+<input type="file" id="dfu" accept=".dfu"><br><button id="flash">Installer</button></section>
+<section><small>Après un reset, la calculatrice revient au système officiel : il suffit de relancer cette page. Jeux .nwa : utilise la page officielle des apps de NumWorks.</small></section>
+<pre id="log"></pre>
+<script>
+const log=m=>{const l=document.getElementById('log');l.textContent+=m+"\n";l.scrollTop=l.scrollHeight};
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let dev=null, xfer=2048, alts=[], slot='B';
+const REQ=(request,value)=>({requestType:'class',recipient:'interface',request,value,index:0});
+async function getStatus(){const r=await dev.controlTransferIn(REQ(3,0),6);const d=new Uint8Array(r.data.buffer);
+  return {status:d[0],poll:d[1]|d[2]<<8|d[3]<<16,state:d[4]}}
+async function clear(){await dev.controlTransferOut(REQ(4,0))}
+async function wait(){let s=await getStatus();
+  while(s.state===4||s.state===3||s.state===6){await sleep(s.poll||5);s=await getStatus()}
+  if(s.state===10){await clear();throw new Error("Erreur DFU (status "+s.status+")")}return s}
+async function dn(block,data){await dev.controlTransferOut(REQ(1,block),data);return wait()}
+const cmd=(c,a)=>dn(0,new Uint8Array([c,a&255,a>>8&255,a>>16&255,a>>>24&255]));
+function parseMap(name){const out=[];const p=(name||"").split('/');if(p.length<3)return out;let addr=parseInt(p[1],16);
+  for(const seg of p[2].split(',')){const m=seg.match(/(\d+)\*(\d+)([KM ])/);if(!m)continue;
+    const sz=parseInt(m[2])*(m[3]==='K'?1024:m[3]==='M'?1048576:1);
+    for(let i=0;i<parseInt(m[1]);i++){out.push([addr,sz]);addr+=sz}}return out}
+let sectors=[];
+async function selectAltFor(addr){
+  for(const a of alts){const s=parseMap(a.name);
+    if(s.length&&addr>=s[0][0]&&addr<s[s.length-1][0]+s[s.length-1][1]){
+      await dev.selectAlternateInterface(0,a.n);sectors=s;log("Interface: "+a.name);return}}
+  throw new Error("Aucune zone mémoire ne couvre 0x"+addr.toString(16))}
+async function erase(addr,len){const end=addr+len;
+  for(const [a,s] of sectors){if(a<end&&a+s>addr){log("Effacement 0x"+a.toString(16));await cmd(0x41,a)}}}
+async function writeAt(addr,data){
+  await selectAltFor(addr);await erase(addr,data.length);await cmd(0x21,addr);
+  const n=Math.ceil(data.length/xfer);
+  for(let i=0;i<n;i++){await dn(2+i,data.slice(i*xfer,(i+1)*xfer));
+    if(i%16==0)log(`0x${addr.toString(16)} : ${Math.round(i/n*100)}%`)}
+  log("Écriture terminée à 0x"+addr.toString(16))}
+async function leave(addr){try{await cmd(0x21,addr);await dev.controlTransferOut(REQ(1,0));await getStatus()}catch(e){}
+  log("Saut vers 0x"+addr.toString(16)+" : la calculatrice redémarre sur ton userland.")}
+document.getElementById('conn').onclick=async()=>{try{
+  dev=await navigator.usb.requestDevice({filters:[{vendorId:0x0483,productId:0xa291},{vendorId:0x0483,productId:0xdf11}]});
+  await dev.open();if(!dev.configuration)await dev.selectConfiguration(1);await dev.claimInterface(0);
+  alts=dev.configuration.interfaces[0].alternates.map(a=>({n:a.alternateSetting,name:a.interfaceName||""}));
+  alts.forEach(a=>log("Alt "+a.n+": "+a.name));
+  slot=alts.some(a=>a.name.includes("0x90000000"))?'A':'B';
+  log("Emplacement inactif détecté : "+slot+" → utilise userland."+slot+".dfu");
+  document.getElementById('st').textContent="connectée ✔"}catch(e){log("Erreur: "+e.message)}};
+document.getElementById('flash').onclick=async()=>{try{
+  if(!dev)return log("Connecte d'abord la calculatrice");
+  const f=document.getElementById('dfu').files[0];if(!f)return log("Choisis un .dfu");
+  let s=document.getElementById('slot').value;if(s==='auto')s=slot;
+  if(!f.name.includes("."+s+"."))if(!confirm("Le fichier ne semble pas être celui de l'emplacement "+s+". Continuer ?"))return;
+  const start=s==='A'?0x90010000:0x90410000;
+  const b=new Uint8Array(await f.arrayBuffer()),v=new DataView(b.buffer);
+  if(String.fromCharCode(...b.slice(0,5))!=="DfuSe")throw new Error("Pas un fichier DfuSe");
+  let off=11;const targets=v.getUint8(10);
+  for(let t=0;t<targets;t++){const ne=v.getUint32(off+270,true);off+=274;
+    for(let e=0;e<ne;e++){const a=v.getUint32(off,true),sz=v.getUint32(off+4,true);off+=8;
+      await writeAt(a,b.slice(off,off+sz));off+=sz}}
+  await leave(start)}catch(e){log("Erreur: "+e.message)}};
+</script></body></html>
