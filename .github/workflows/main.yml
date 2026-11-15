@@ -43,10 +43,25 @@ jobs:
           make -C firmware/epsilon clean PLATFORM=n0120 || true
           make -C firmware/epsilon -j4 PLATFORM=n0120 EPSILON_VERSION=$V userland.A.dfu
           make -C firmware/epsilon -j4 PLATFORM=n0120 EPSILON_VERSION=$V userland.B.dfu
+      - name: Extraire les .bin
+        run: |
+          python3 - <<'PY'
+          import struct, glob
+          for f in glob.glob("firmware/**/userland.*.dfu", recursive=True):
+              b = open(f, "rb").read()
+              off = 11; i = 0
+              for t in range(b[10]):
+                  ne = struct.unpack_from("<I", b, off + 270)[0]; off += 274
+                  for e in range(ne):
+                      a, sz = struct.unpack_from("<II", b, off); off += 8
+                      out = f[:-4] + (".bin" if i == 0 else "." + str(i) + ".bin")
+                      open(out, "wb").write(b[off:off + sz])
+                      print(out, hex(a), sz); off += sz; i += 1
+          PY
       - name: Rassembler
         run: |
           mkdir -p out
-          find firmware -name "userland.*.dfu" -exec cp {} out/ \;
+          find firmware \( -name "userland.*.dfu" -o -name "userland.*.bin" \) -exec cp {} out/ \;
           ls -l out
       - uses: actions/upload-artifact@v4
         with:
