@@ -44,7 +44,7 @@ async function erase(addr,len){const end=addr+len;
 async function writeAt(addr,data){
   await selectAltFor(addr);await erase(addr,data.length);await cmd(0x21,addr);
   const n=Math.ceil(data.length/xfer);
-  for(let i=0;i<n;i++){await dn(2+i,data.slice(i*xfer,(i+1)*xfer));
+  for(let i=0;i<n;i++){await cmd(0x21,addr+i*xfer);await dn(2,data.slice(i*xfer,(i+1)*xfer));
     if(i%16==0)log(`0x${addr.toString(16)} : ${Math.round(i/n*100)}%`)}
   log("Écriture terminée à 0x"+addr.toString(16))}
 async function leave(addr){try{await cmd(0x21,addr);await dev.controlTransferOut(REQ(1,0));await getStatus()}catch(e){}
