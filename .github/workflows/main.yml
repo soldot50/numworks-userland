@@ -72,6 +72,7 @@ jobs:
           python3 - <<'PY'
           import struct, glob, os, re
           V = os.environ["V"].encode()
+          M = bytes([0xFE, 0xED, 0xC0, 0xDE])
           for f in glob.glob("firmware/**/userland.*.dfu", recursive=True):
               b = bytearray(open(f, "rb").read())
               off = 11; i = 0
@@ -79,12 +80,18 @@ jobs:
                   ne = struct.unpack_from("<I", b, off + 270)[0]; off += 274
                   for e in range(ne):
                       a, sz = struct.unpack_from("<II", b, off); off += 8
-                      print("EN-TETE", f, hex(a), "premiers octets :", bytes(b[off:off + 16]).hex())
-                      ver = bytes(b[off + 4:off + 12]).rstrip(b"\0")
-                      print("VERSION ATTENDUE DANS LE FICHIER :", ver)
-                      if re.fullmatch(rb"\d+\.\d+\.\d+", ver) and ver != V:
-                          b[off + 4:off + 12] = V.ljust(8, b"\0")
-                          print("  -> version remplacee par", V)
+                      d = b[off:off + sz]
+                      h = -1
+                      for k in range(0, min(sz, 0x40000) - 0x30, 4):
+                          if d[k:k+4] == M and d[k+0x2C:k+0x30] == M:
+                              h = k; break
+                      print("ELEMENT", f, hex(a), "taille", sz, "en-tete userland a +", hex(h) if h >= 0 else "introuvable")
+                      if h >= 0:
+                          ver = bytes(d[h+4:h+12]).rstrip(b"\0")
+                          print("VERSION ATTENDUE DANS LE FICHIER :", ver)
+                          if re.fullmatch(rb"\d+\.\d+\.\d+", ver) and ver != V:
+                              b[off+h+4:off+h+12] = V.ljust(8, b"\0")
+                              print("  -> version remplacee par", V)
                       out = f[:-4] + (".bin" if i == 0 else "." + str(i) + ".bin")
                       open(out, "wb").write(bytes(b[off:off + sz]))
                       print(out, hex(a), sz)
