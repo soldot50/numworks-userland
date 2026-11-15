@@ -13,7 +13,9 @@ input,select{padding:.4rem;margin:.3rem 0}pre{background:#111;color:#8f8;padding
 <section><h3>2. Installer</h3>
 <p>Emplacement : <select id="slot"><option value="auto">Automatique</option><option value="A">A (0x90010000)</option><option value="B">B (0x90410000)</option></select></p>
 <p>Choisis le fichier correspondant : <code>userland.A.dfu</code> / <code>userland.B.dfu</code> (ou <code>.bin</code>) (l'emplacement détecté s'affiche dans le journal).</p>
-<input type="file" id="dfu" accept=".dfu,.bin"><br><button id="flash">Installer</button></section>
+<input type="file" id="dfu" accept=".dfu,.bin"><br>
+<label><input type="checkbox" id="adapt" checked> Adapter la version du fichier à celle du noyau de l'emplacement</label><br>
+<button id="flash">Installer</button> <button id="hdr">Lire les en-têtes (diagnostic)</button></section>
 <section><small>Après un reset, la calculatrice revient au système officiel : il suffit de relancer cette page. Jeux .nwa : utilise la page officielle des apps de NumWorks.</small></section>
 <pre id="log"></pre>
 <script>
@@ -57,6 +59,33 @@ async function readAlts(){const out=[];
     const d=new Uint8Array(r.data.buffer);let i=0;
     while(i<d.length&&d[i]>0){if(d[i+1]===4&&d[i+2]===0)out.push({n:d[i+3],name:await descStr(d[i+8])});if(d[i+1]===0x21&&d[i]>=7){const t=d[i+5]|d[i+6]<<8;if(t>=64){xfer=t;log('Taille de transfert DFU : '+t)}}i+=d[i]}
   }catch(e){log("Descripteurs illisibles: "+e.message)}return out}
+
+const hexs=u=>[...u].map(x=>x.toString(16).padStart(2,'0')).join(' ');
+const ascs=u=>[...u].map(x=>x>=32&&x<127?String.fromCharCode(x):'.').join('');
+async function readMem(addr,len){
+  await selectAltFor(addr);await cmd(0x21,addr);
+  const r=await dev.controlTransferIn(REQ(2,2),len);
+  try{await dev.controlTransferOut(REQ(6,0))}catch(e){}
+  try{await getStatus()}catch(e){}
+  return new Uint8Array(r.data.buffer)}
+async function kernelVersion(userAddr){
+  try{const ka=userAddr-0x10000;const h=await readMem(ka,32);
+    log("Noyau @0x"+ka.toString(16)+" : "+hexs(h.slice(0,16))+" | "+ascs(h.slice(0,16)));
+    const m=ascs(h.slice(4,12)).match(/^\d+\.\d+\.\d+/);return m?m[0]:null}
+  catch(e){log("Lecture du noyau impossible : "+e.message);return null}}
+document.getElementById('hdr').onclick=async()=>{try{
+  if(!dev)return log("Connecte d'abord la calculatrice");
+  for(const a of [0x90400000,0x90410000]){const h=await readMem(a,32);
+    log("@0x"+a.toString(16)+" : "+hexs(h.slice(0,24))+" | "+ascs(h.slice(0,24)))}
+  }catch(e){log("Erreur: "+e.message)}};
+async function adapt(data,start){
+  if(!document.getElementById('adapt').checked)return data;
+  const kv=await kernelVersion(start);
+  const cur=ascs(data.slice(4,12)).match(/^\d+\.\d+\.\d+/);
+  if(!kv||!cur){log("Adaptation de version ignorée (noyau: "+kv+", fichier: "+(cur?cur[0]:"non reconnu")+")");return data}
+  if(kv===cur[0]){log("Version du fichier ("+cur[0]+") = version du noyau.");return data}
+  const out=data.slice();out.set(new TextEncoder().encode(kv.padEnd(8,"\0")),4);
+  log("Version du fichier "+cur[0]+" → "+kv+" (version du noyau de l'emplacement)");return out}
 document.getElementById('conn').onclick=async()=>{try{
   dev=await navigator.usb.requestDevice({filters:[{vendorId:0x0483,productId:0xa291},{vendorId:0x0483,productId:0xdf11}]});
   await dev.open();if(!dev.configuration)await dev.selectConfiguration(1);await dev.claimInterface(0);
@@ -78,11 +107,11 @@ document.getElementById('flash').onclick=async()=>{try{
   if(!f.name.includes("."+s+"."))if(!confirm("Le fichier ne semble pas être celui de l'emplacement "+s+". Continuer ?"))return;
   const start=s==='A'?0x90010000:0x90410000;
   const b=new Uint8Array(await f.arrayBuffer()),v=new DataView(b.buffer);
-  if(f.name.endsWith(".bin")){log("Fichier .bin brut : écriture à 0x"+start.toString(16));await writeAt(start,b);await leave(start);return}
+  if(f.name.endsWith(".bin")){log("Fichier .bin brut : écriture à 0x"+start.toString(16));await writeAt(start,await adapt(b,start));await leave(start);return}
   if(String.fromCharCode(...b.slice(0,5))!=="DfuSe")throw new Error("Pas un fichier DfuSe");
   let off=11;const targets=v.getUint8(10);
   for(let t=0;t<targets;t++){const ne=v.getUint32(off+270,true);off+=274;
     for(let e=0;e<ne;e++){const a=v.getUint32(off,true),sz=v.getUint32(off+4,true);off+=8;
-      await writeAt(a,b.slice(off,off+sz));off+=sz}}
+      let d=b.slice(off,off+sz);if(a===start)d=await adapt(d,start);await writeAt(a,d);off+=sz}}
   await leave(start)}catch(e){log("Erreur: "+e.message)}};
 </script></body></html>
