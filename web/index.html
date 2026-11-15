@@ -12,8 +12,8 @@ input,select{padding:.4rem;margin:.3rem 0}pre{background:#111;color:#8f8;padding
 <button id="conn">Connecter</button> <span id="st">non connectée</span></section>
 <section><h3>2. Installer</h3>
 <p>Emplacement : <select id="slot"><option value="auto">Automatique</option><option value="A">A (0x90010000)</option><option value="B">B (0x90410000)</option></select></p>
-<p>Choisis le fichier correspondant : <code>userland.A.dfu</code> ou <code>userland.B.dfu</code> (l'emplacement détecté s'affiche dans le journal).</p>
-<input type="file" id="dfu" accept=".dfu"><br><button id="flash">Installer</button></section>
+<p>Choisis le fichier correspondant : <code>userland.A.dfu</code> / <code>userland.B.dfu</code> (ou <code>.bin</code>) (l'emplacement détecté s'affiche dans le journal).</p>
+<input type="file" id="dfu" accept=".dfu,.bin"><br><button id="flash">Installer</button></section>
 <section><small>Après un reset, la calculatrice revient au système officiel : il suffit de relancer cette page. Jeux .nwa : utilise la page officielle des apps de NumWorks.</small></section>
 <pre id="log"></pre>
 <script>
@@ -27,7 +27,7 @@ async function clear(){await dev.controlTransferOut(REQ(4,0))}
 async function wait(){let s=await getStatus();
   while(s.state===4||s.state===3||s.state===6){await sleep(s.poll||5);s=await getStatus()}
   if(s.state===10){await clear();throw new Error("Erreur DFU (status "+s.status+")")}return s}
-async function dn(block,data){await dev.controlTransferOut(REQ(1,block),data);return wait()}
+async function dn(block,data){await dev.controlTransferOut(REQ(1,block),data);try{return await wait()}catch(e){throw new Error(e.message+" au bloc "+block+" (taille de transfert "+xfer+")")}}
 const cmd=(c,a)=>dn(0,new Uint8Array([c,a&255,a>>8&255,a>>16&255,a>>>24&255]));
 function parseMap(name){const out=[];const p=(name||"").split('/');if(p.length<3)return out;let addr=parseInt(p[1],16);
   for(const seg of p[2].split(',')){const m=seg.match(/(\d+)\*(\d+)([KM ])/);if(!m)continue;
@@ -55,13 +55,13 @@ async function descStr(idx){ if(!idx) return ""; try{
 async function readAlts(){const out=[];
   try{const r=await dev.controlTransferIn({requestType:'standard',recipient:'device',request:6,value:(2<<8),index:0},1024);
     const d=new Uint8Array(r.data.buffer);let i=0;
-    while(i<d.length&&d[i]>0){if(d[i+1]===4&&d[i+2]===0)out.push({n:d[i+3],name:await descStr(d[i+8])});i+=d[i]}
+    while(i<d.length&&d[i]>0){if(d[i+1]===4&&d[i+2]===0)out.push({n:d[i+3],name:await descStr(d[i+8])});if(d[i+1]===0x21&&d[i]>=7){const t=d[i+5]|d[i+6]<<8;if(t>=64){xfer=t;log('Taille de transfert DFU : '+t)}}i+=d[i]}
   }catch(e){log("Descripteurs illisibles: "+e.message)}return out}
 document.getElementById('conn').onclick=async()=>{try{
   dev=await navigator.usb.requestDevice({filters:[{vendorId:0x0483,productId:0xa291},{vendorId:0x0483,productId:0xdf11}]});
   await dev.open();if(!dev.configuration)await dev.selectConfiguration(1);await dev.claimInterface(0);
   alts=dev.configuration.interfaces[0].alternates.map(a=>({n:a.alternateSetting,name:a.interfaceName||""}));
-  if(alts.every(a=>!a.name)){log("Noms vides, lecture des descripteurs USB...");const r=await readAlts();if(r.length)alts=r}
+  {const r=await readAlts();if(alts.every(a=>!a.name)&&r.length){log("Noms lus via les descripteurs USB.");alts=r}}
   alts.forEach(a=>log("Alt "+a.n+": "+(a.name||"(vide)")));
   if(alts.every(a=>!a.name)){
     log("ATTENTION: noms illisibles, carte mémoire supposée (alt 0 = flash externe 0x90000000).");
@@ -78,6 +78,7 @@ document.getElementById('flash').onclick=async()=>{try{
   if(!f.name.includes("."+s+"."))if(!confirm("Le fichier ne semble pas être celui de l'emplacement "+s+". Continuer ?"))return;
   const start=s==='A'?0x90010000:0x90410000;
   const b=new Uint8Array(await f.arrayBuffer()),v=new DataView(b.buffer);
+  if(f.name.endsWith(".bin")){log("Fichier .bin brut : écriture à 0x"+start.toString(16));await writeAt(start,b);await leave(start);return}
   if(String.fromCharCode(...b.slice(0,5))!=="DfuSe")throw new Error("Pas un fichier DfuSe");
   let off=11;const targets=v.getUint8(10);
   for(let t=0;t<targets;t++){const ne=v.getUint32(off+270,true);off+=274;
