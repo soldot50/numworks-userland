@@ -18,8 +18,22 @@ jobs:
           pip3 install --break-system-packages lz4 pypng stringcase pyelftools
           arm-none-eabi-gcc --version | head -1
       - uses: actions/checkout@v4
-      - name: Code d'Epsilon
-        run: git clone --depth 1 https://github.com/numworks/epsilon.git firmware
+      - name: Code d'Epsilon (meme version que ta calculatrice)
+        env:
+          V: ${{ inputs.version }}
+        run: |
+          git clone --filter=blob:none https://github.com/numworks/epsilon.git firmware
+          cd firmware
+          TAG=$(git tag --list | awk -v v="$V" '$0==v || $0=="v"v || $0=="version/"v {print; exit}')
+          if [ -z "$TAG" ]; then TAG=$(git tag --list | grep -F "$V" | head -1 || true); fi
+          if [ -z "$TAG" ]; then
+            echo "Aucune étiquette ne correspond à $V. Dernières étiquettes disponibles :"
+            git tag --list --sort=-creatordate | head -30
+            exit 1
+          fi
+          echo "Version utilisée : $TAG"
+          git checkout "$TAG"
+          git submodule update --init --recursive || true
       - name: Theme
         run: |
           python3 - <<'PY'
@@ -39,10 +53,11 @@ jobs:
         env:
           V: ${{ inputs.version }}
         run: |
+          D=firmware/epsilon; [ -d "$D" ] || D=firmware
           ls firmware
-          make -C firmware/epsilon clean PLATFORM=n0120 || true
-          make -C firmware/epsilon -j4 PLATFORM=n0120 EPSILON_VERSION=$V userland.A.dfu
-          make -C firmware/epsilon -j4 PLATFORM=n0120 EPSILON_VERSION=$V userland.B.dfu
+          make -C $D clean PLATFORM=n0120 || true
+          make -C $D -j4 PLATFORM=n0120 EPSILON_VERSION=$V userland.A.dfu
+          make -C $D -j4 PLATFORM=n0120 EPSILON_VERSION=$V userland.B.dfu
       - name: Extraire les .bin
         run: |
           python3 - <<'PY'
