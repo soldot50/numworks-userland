@@ -18,28 +18,22 @@ jobs:
           pip3 install --break-system-packages lz4 pypng stringcase pyelftools
           arm-none-eabi-gcc --version | head -1
       - uses: actions/checkout@v4
-      - name: Code d'Epsilon (meme version que ta calculatrice)
+      - name: Code d'Epsilon (branche de ta version)
         env:
           V: ${{ inputs.version }}
         run: |
           MAJOR=${V%%.*}
           git clone --filter=blob:none --branch "version-$MAJOR" https://github.com/numworks/epsilon.git firmware || git clone --filter=blob:none https://github.com/numworks/epsilon.git firmware
           cd firmware
-          git branch --show-current || true
-          F=$(git grep -l "APP_VERSION" -- '*Makefile' '*.mak' '*.mk' | head -5)
-          echo "Fichiers contenant APP_VERSION : $F"
-          git grep -n "APP_VERSION" -- $F | head -10 || true
+          echo "Branche utilisee : $(git branch --show-current)"
+          git log -3 --format='%h %ad %s' --date=short
+          F=$(git grep -l "EPSILON_VERSION\|APP_VERSION" -- '*Makefile' '*.mak' '*.mk' | head -5 || true)
+          echo "Fichiers de version : $F"
+          git grep -n "EPSILON_VERSION\|APP_VERSION" -- $F | head -10 || true
           if git grep -q -F "$V" -- $F; then
-            echo "Le sommet de la branche correspond deja a $V"
+            echo "Le code public indique deja la version $V"
           else
-            C=$(git log --format=%H -S"$V" -- $F | tail -1)
-            if [ -z "$C" ]; then
-              echo "Version $V introuvable dans l'historique. Derniers commits :"
-              git log -10 --format='%h %ad %s' --date=short
-              exit 1
-            fi
-            echo "Commit utilise : $C"
-            git checkout "$C"
+            echo "AVERTISSEMENT : le code public n'indique pas $V. On compile le sommet de la branche et on force EPSILON_VERSION=$V (methode conseillee par NumWorks)."
           fi
           git submodule update --init --recursive || true
       - name: Theme
