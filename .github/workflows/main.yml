@@ -22,17 +22,25 @@ jobs:
         env:
           V: ${{ inputs.version }}
         run: |
-          git clone --filter=blob:none https://github.com/numworks/epsilon.git firmware
+          MAJOR=${V%%.*}
+          git clone --filter=blob:none --branch "version-$MAJOR" https://github.com/numworks/epsilon.git firmware || git clone --filter=blob:none https://github.com/numworks/epsilon.git firmware
           cd firmware
-          TAG=$(git tag --list | awk -v v="$V" '$0==v || $0=="v"v || $0=="version/"v {print; exit}')
-          if [ -z "$TAG" ]; then TAG=$(git tag --list | grep -F "$V" | head -1 || true); fi
-          if [ -z "$TAG" ]; then
-            echo "Aucune étiquette ne correspond à $V. Dernières étiquettes disponibles :"
-            git tag --list --sort=-creatordate | head -30
-            exit 1
+          git branch --show-current || true
+          F=$(git grep -l "APP_VERSION" -- '*Makefile' '*.mak' '*.mk' | head -5)
+          echo "Fichiers contenant APP_VERSION : $F"
+          git grep -n "APP_VERSION" -- $F | head -10 || true
+          if git grep -q -F "$V" -- $F; then
+            echo "Le sommet de la branche correspond deja a $V"
+          else
+            C=$(git log --format=%H -S"$V" -- $F | tail -1)
+            if [ -z "$C" ]; then
+              echo "Version $V introuvable dans l'historique. Derniers commits :"
+              git log -10 --format='%h %ad %s' --date=short
+              exit 1
+            fi
+            echo "Commit utilise : $C"
+            git checkout "$C"
           fi
-          echo "Version utilisée : $TAG"
-          git checkout "$TAG"
           git submodule update --init --recursive || true
       - name: Theme
         run: |
