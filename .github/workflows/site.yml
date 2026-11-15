@@ -1,0 +1,20 @@
+name: Publier le site
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "web/**"
+jobs:
+  site:
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+      - uses: actions/deploy-pages@v4
