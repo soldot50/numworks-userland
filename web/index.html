@@ -14,8 +14,8 @@ input,select{padding:.4rem;margin:.3rem 0}pre{background:#111;color:#8f8;padding
 <p>Emplacement : <select id="slot"><option value="auto">Automatique</option><option value="A">A (0x90010000)</option><option value="B">B (0x90410000)</option></select></p>
 <p>Choisis le fichier correspondant : <code>userland.A.dfu</code> / <code>userland.B.dfu</code> (ou <code>.bin</code>) (l'emplacement détecté s'affiche dans le journal).</p>
 <input type="file" id="dfu" accept=".dfu,.bin"><br>
-<label><input type="checkbox" id="adapt" checked> Adapter la version du fichier à celle du noyau de l'emplacement</label><br>
-<button id="flash">Installer</button> <button id="hdr">Lire les en-têtes (diagnostic)</button></section>
+Version à forcer dans le fichier (facultatif, ex. 26.3.0) : <input id="forceV" size="10" placeholder="vide = ne rien changer"><br>
+<button id="flash">Installer</button></section>
 <section><small>Après un reset, la calculatrice revient au système officiel : il suffit de relancer cette page. Jeux .nwa : utilise la page officielle des apps de NumWorks.</small></section>
 <pre id="log"></pre>
 <script>
@@ -62,30 +62,19 @@ async function readAlts(){const out=[];
 
 const hexs=u=>[...u].map(x=>x.toString(16).padStart(2,'0')).join(' ');
 const ascs=u=>[...u].map(x=>x>=32&&x<127?String.fromCharCode(x):'.').join('');
-async function readMem(addr,len){
-  await selectAltFor(addr);await cmd(0x21,addr);
-  const r=await dev.controlTransferIn(REQ(2,2),len);
-  try{await dev.controlTransferOut(REQ(6,0))}catch(e){}
-  try{await getStatus()}catch(e){}
-  return new Uint8Array(r.data.buffer)}
-async function kernelVersion(userAddr){
-  try{const ka=userAddr-0x10000;const h=await readMem(ka,32);
-    log("Noyau @0x"+ka.toString(16)+" : "+hexs(h.slice(0,16))+" | "+ascs(h.slice(0,16)));
-    const m=ascs(h.slice(4,12)).match(/^\d+\.\d+\.\d+/);return m?m[0]:null}
-  catch(e){log("Lecture du noyau impossible : "+e.message);return null}}
-document.getElementById('hdr').onclick=async()=>{try{
-  if(!dev)return log("Connecte d'abord la calculatrice");
-  for(const a of [0x90400000,0x90410000]){const h=await readMem(a,32);
-    log("@0x"+a.toString(16)+" : "+hexs(h.slice(0,24))+" | "+ascs(h.slice(0,24)))}
-  }catch(e){log("Erreur: "+e.message)}};
+const MAGIC=[0xFE,0xED,0xC0,0xDE];
+function findHeader(d){for(let i=0;i+0x30<=Math.min(d.length,0x40000);i+=4){
+  if(MAGIC.every((m,k)=>d[i+k]===m)&&MAGIC.every((m,k)=>d[i+0x2C+k]===m))return i}return -1}
 async function adapt(data,start){
-  if(!document.getElementById('adapt').checked)return data;
-  const kv=await kernelVersion(start);
-  const cur=ascs(data.slice(4,12)).match(/^\d+\.\d+\.\d+/);
-  if(!kv||!cur){log("Adaptation de version ignorée (noyau: "+kv+", fichier: "+(cur?cur[0]:"non reconnu")+")");return data}
-  if(kv===cur[0]){log("Version du fichier ("+cur[0]+") = version du noyau.");return data}
-  const out=data.slice();out.set(new TextEncoder().encode(kv.padEnd(8,"\0")),4);
-  log("Version du fichier "+cur[0]+" → "+kv+" (version du noyau de l'emplacement)");return out}
+  const h=findHeader(data);
+  if(h<0){log("En-tête userland introuvable dans ce fichier (rien modifié).");return data}
+  const cur=ascs(data.slice(h+4,h+12)).match(/^\d+\.\d+\.\d+/);
+  log("En-tête userland à +0x"+h.toString(16)+" ; version attendue par le fichier : "+(cur?cur[0]:hexs(data.slice(h+4,h+12))));
+  const fv=document.getElementById('forceV').value.trim();
+  if(!fv)return data;
+  if(!/^\d+\.\d+\.\d+$/.test(fv)||fv.length>8){log("Version forcée invalide : "+fv);return data}
+  const out=data.slice();out.set(new TextEncoder().encode(fv.padEnd(8,"\0")),h+4);
+  log("Version forcée dans le fichier : "+fv);return out}
 document.getElementById('conn').onclick=async()=>{try{
   dev=await navigator.usb.requestDevice({filters:[{vendorId:0x0483,productId:0xa291},{vendorId:0x0483,productId:0xdf11}]});
   await dev.open();if(!dev.configuration)await dev.selectConfiguration(1);await dev.claimInterface(0);
