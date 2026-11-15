@@ -6,6 +6,10 @@ on:
         description: "Version d Epsilon de ta calculatrice (Parametres > A propos)"
         default: "26.4.0"
         required: true
+      commit:
+        description: "Commit entre parentheses dans Parametres > A propos (ex: cc9262e)"
+        default: "cc9262e"
+        required: false
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -18,23 +22,24 @@ jobs:
           pip3 install --break-system-packages lz4 pypng stringcase pyelftools
           arm-none-eabi-gcc --version | head -1
       - uses: actions/checkout@v4
-      - name: Code d'Epsilon (branche de ta version)
+      - name: Code d'Epsilon (commit exact de ta calculatrice)
         env:
           V: ${{ inputs.version }}
+          C: ${{ inputs.commit }}
         run: |
           MAJOR=${V%%.*}
-          git clone --filter=blob:none --branch "version-$MAJOR" https://github.com/numworks/epsilon.git firmware || git clone --filter=blob:none https://github.com/numworks/epsilon.git firmware
+          git clone --filter=blob:none https://github.com/numworks/epsilon.git firmware
           cd firmware
-          echo "Branche utilisee : $(git branch --show-current)"
-          git log -3 --format='%h %ad %s' --date=short
-          F=$(git grep -l "EPSILON_VERSION\|APP_VERSION" -- '*Makefile' '*.mak' '*.mk' | head -5 || true)
-          echo "Fichiers de version : $F"
-          git grep -n "EPSILON_VERSION\|APP_VERSION" -- $F | head -10 || true
-          if git grep -q -F "$V" -- $F; then
-            echo "Le code public indique deja la version $V"
+          git fetch origin "version-$MAJOR" || true
+          if [ -n "$C" ] && git rev-parse --verify -q "$C^{commit}" >/dev/null; then
+            git checkout "$C"
+            echo "Commit exact utilise : $C"
           else
-            echo "AVERTISSEMENT : le code public n'indique pas $V. On compile le sommet de la branche et on force EPSILON_VERSION=$V (methode conseillee par NumWorks)."
+            echo "AVERTISSEMENT : commit '$C' introuvable dans le depot public, on prend la branche version-$MAJOR."
+            git checkout "origin/version-$MAJOR" || true
           fi
+          git log -1 --format='Code compile : %h %ad %s' --date=short
+          git grep -n "EPSILON_VERSION\|APP_VERSION" -- '*Makefile' '*.mak' '*.mk' | head -10 || true
           git submodule update --init --recursive || true
       - name: Theme
         run: |
@@ -60,20 +65,31 @@ jobs:
           make -C $D clean PLATFORM=n0120 || true
           make -C $D -j4 PLATFORM=n0120 EPSILON_VERSION=$V userland.A.dfu
           make -C $D -j4 PLATFORM=n0120 EPSILON_VERSION=$V userland.B.dfu
-      - name: Extraire les .bin
+      - name: Verifier la version dans le fichier et extraire les .bin
+        env:
+          V: ${{ inputs.version }}
         run: |
           python3 - <<'PY'
-          import struct, glob
+          import struct, glob, os, re
+          V = os.environ["V"].encode()
           for f in glob.glob("firmware/**/userland.*.dfu", recursive=True):
-              b = open(f, "rb").read()
+              b = bytearray(open(f, "rb").read())
               off = 11; i = 0
               for t in range(b[10]):
                   ne = struct.unpack_from("<I", b, off + 270)[0]; off += 274
                   for e in range(ne):
                       a, sz = struct.unpack_from("<II", b, off); off += 8
+                      print("EN-TETE", f, hex(a), "premiers octets :", bytes(b[off:off + 16]).hex())
+                      ver = bytes(b[off + 4:off + 12]).rstrip(b"\0")
+                      print("VERSION ATTENDUE DANS LE FICHIER :", ver)
+                      if re.fullmatch(rb"\d+\.\d+\.\d+", ver) and ver != V:
+                          b[off + 4:off + 12] = V.ljust(8, b"\0")
+                          print("  -> version remplacee par", V)
                       out = f[:-4] + (".bin" if i == 0 else "." + str(i) + ".bin")
-                      open(out, "wb").write(b[off:off + sz])
-                      print(out, hex(a), sz); off += sz; i += 1
+                      open(out, "wb").write(bytes(b[off:off + sz]))
+                      print(out, hex(a), sz)
+                      off += sz; i += 1
+              open(f, "wb").write(bytes(b))
           PY
       - name: Rassembler
         run: |
