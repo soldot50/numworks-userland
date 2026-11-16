@@ -1,0 +1,35 @@
+name: Build app Userland (.nwa)
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "app/**"
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Outils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi make git
+          arm-none-eabi-gcc --version | head -1
+      - name: Modele officiel NumWorks (app en C)
+        run: git clone --depth 1 https://github.com/numworks/epsilon-sample-app-c.git sample
+      - name: Mettre notre code a la place de l'exemple
+        run: |
+          ls -la sample sample/src
+          cp app/src/main.c sample/src/main.c
+      - name: Compilation
+        working-directory: sample
+        run: |
+          make clean
+          make build
+          ls -la output
+      - uses: actions/upload-artifact@v4
+        with:
+          name: userland-nwa
+          path: sample/output/app.nwa
