@@ -1,0 +1,37 @@
+name: Reperer le code d'Epsilon (2)
+on:
+  workflow_dispatch:
+jobs:
+  recon:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Cloner et extraire
+        run: |
+          git clone --filter=blob:none https://github.com/numworks/epsilon.git firmware
+          cd firmware
+          git checkout cc9262e 2>/dev/null || git checkout origin/version-26 2>/dev/null || true
+          show() { echo; echo "######## $1"; if [ -f "$1" ]; then sed -n "1,${2:-200}p" "$1"; else echo "(absent)"; fi; }
+          {
+            echo "commit: $(git log -1 --format='%h %ad' --date=short) branche: $(git branch --show-current)"
+            echo "== applications"; ls epsilon/apps
+            show epsilon/apps/home/apps_layout.csv 60
+            show epsilon/apps/home/Makefile 80
+            show epsilon/apps/home/app.h 120
+            show epsilon/apps/home/controller.cpp 260
+            show epsilon/apps/Makefile 80
+            echo "== usages external_apps dans epsilon/apps"; git grep -n -i "external" -- epsilon/apps | head -60
+            show shared/ion/include/ion/external_apps.h 120
+            show shared/ion/src/device/userland/drivers/external_apps.cpp 200
+            show epsilon/eadk/module.mak 80
+            show epsilon/eadk/src/svc.cpp 160
+            show epsilon/eadk/src/trampoline.cpp 120
+            show epsilon/eadk/src/platform.c 80
+            show epsilon/external_apps/build/external_app.mak 120
+            show epsilon/external_apps/sample_c/Makefile 60
+            show epsilon/external_apps/sample_c/src/main.c 80
+          } > /tmp/recon2.txt 2>&1
+          wc -l /tmp/recon2.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recon2
+          path: /tmp/recon2.txt
