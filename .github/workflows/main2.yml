@@ -1,0 +1,172 @@
+name: Build Userland 2
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version d Epsilon de ta calculatrice (Parametres > A propos)"
+        default: "26.4.0"
+        required: true
+      commit:
+        description: "Commit entre parentheses dans Parametres > A propos (ex: cc9262e)"
+        default: "cc9262e"
+        required: false
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    container: debian:12
+    steps:
+      - name: Dependances
+        run: |
+          apt-get update
+          apt-get install -y build-essential git imagemagick libx11-dev libxext-dev libfreetype6-dev libpng-dev libjpeg-dev libusb-1.0-0-dev pkg-config python3 python3-pip gcc-arm-none-eabi binutils-arm-none-eabi inkscape librsvg2-bin nodejs npm libnewlib-arm-none-eabi
+          pip3 install --break-system-packages lz4 pypng stringcase pyelftools
+          arm-none-eabi-gcc --version | head -1
+      - uses: actions/checkout@v4
+      - name: Code d'Epsilon (commit exact de ta calculatrice)
+        env:
+          V: ${{ inputs.version }}
+          C: ${{ inputs.commit }}
+        run: |
+          MAJOR=${V%%.*}
+          git clone --filter=blob:none https://github.com/numworks/epsilon.git firmware
+          cd firmware
+          git fetch origin "version-$MAJOR" || true
+          if [ -n "$C" ] && git rev-parse --verify -q "$C^{commit}" >/dev/null; then
+            git checkout "$C"
+            echo "Commit exact utilise : $C"
+          else
+            echo "AVERTISSEMENT : commit '$C' introuvable dans le depot public, on prend la branche version-$MAJOR."
+            git checkout "origin/version-$MAJOR" || true
+          fi
+          git log -1 --format='Code compile : %h %ad %s' --date=short
+          git grep -n "EPSILON_VERSION\|APP_VERSION" -- '*Makefile' '*.mak' '*.mk' | head -10 || true
+          git submodule update --init --recursive || true
+      - name: Theme
+        run: |
+          python3 - <<'PY'
+          import json, re, pathlib
+          theme = json.load(open("theme/userland_theme.json"))["palette"]
+          n = 0
+          for f in list(pathlib.Path("firmware").rglob("palette.h")) + list(pathlib.Path("firmware").rglob("palette.cpp")):
+              s = f.read_text()
+              for name, col in theme.items():
+                  pat = re.compile(r'(\b' + re.escape(name) + r'\b\s*=\s*KDColor::RGB24\(0x)([0-9A-Fa-f]{6})(\))')
+                  s, k = pat.subn(lambda m: m.group(1) + col.lstrip('#').upper() + m.group(3), s)
+                  n += k
+              f.write_text(s)
+          print(n, "couleur(s) modifiee(s)")
+          PY
+      - name: Compilation
+        env:
+          V: ${{ inputs.version }}
+        run: |
+          D=firmware/epsilon; [ -d "$D" ] || D=firmware
+          ls firmware
+          make -C $D clean PLATFORM=n0120 || true
+          make -C $D -j4 PLATFORM=n0120 EPSILON_VERSION=$V userland.A.dfu
+          make -C $D -j4 PLATFORM=n0120 EPSILON_VERSION=$V userland.B.dfu
+      - name: Verifier la version dans le fichier et extraire les .bin
+        env:
+          V: ${{ inputs.version }}
+        run: |
+          python3 - <<'PY'
+          import struct, glob, os, re
+          V = os.environ["V"].encode()
+          M = bytes([0xFE, 0xED, 0xC0, 0xDE])
+          for f in glob.glob("firmware/**/userland.*.dfu", recursive=True):
+              b = bytearray(open(f, "rb").read())
+              off = 11; i = 0
+              for t in range(b[10]):
+                  ne = struct.unpack_from("<I", b, off + 270)[0]; off += 274
+                  for e in range(ne):
+                      a, sz = struct.unpack_from("<II", b, off); off += 8
+                      d = b[off:off + sz]
+                      h = -1
+                      for k in range(0, min(sz, 0x40000) - 0x30, 4):
+                          if d[k:k+4] == M and d[k+0x2C:k+0x30] == M:
+                              h = k; break
+                      print("ELEMENT", f, hex(a), "taille", sz, "en-tete userland a +", hex(h) if h >= 0 else "introuvable")
+                      if h >= 0:
+                          ver = bytes(d[h+4:h+12]).rstrip(b"\0")
+                          print("VERSION ATTENDUE DANS LE FICHIER :", ver)
+                          if re.fullmatch(rb"\d+\.\d+\.\d+", ver) and ver != V:
+                              b[off+h+4:off+h+12] = V.ljust(8, b"\0")
+                              print("  -> version remplacee par", V)
+                      out = f[:-4] + (".bin" if i == 0 else "." + str(i) + ".bin")
+                      open(out, "wb").write(bytes(b[off:off + sz]))
+                      print(out, hex(a), sz)
+                      off += sz; i += 1
+              open(f, "wb").write(bytes(b))
+          PY
+      - name: Ajouter l'app Userland dans les .dfu
+        run: |
+          cp app/src/main.c firmware/epsilon/external_apps/sample_c/src/main.c
+          make -C firmware/epsilon/external_apps/sample_c PLATFORM=device
+          cp firmware/epsilon/external_apps/sample_c/output/device/app.nwa app.nwa
+          npx --yes -- nwlink@1.0.0 nwa-bin --help | tee nwhelp.txt
+          python3 - <<'PY'
+          import struct, glob, subprocess, re
+          help_ = open("nwhelp.txt").read()
+          fo = re.findall(r"--[a-z-]*flash[a-z-]*", help_)
+          ro = re.findall(r"--[a-z-]*ram[a-z-]*", help_)
+          print("options flash:", fo, "ram:", ro)
+          M = bytes([0xFE, 0xED, 0xC0, 0xDE])
+          for f in sorted(glob.glob("firmware/**/userland.*.dfu", recursive=True)):
+              slot = re.search(r"userland\.([AB])\.dfu", f).group(1)
+              b = bytearray(open(f, "rb").read())
+              a0, sz0 = struct.unpack_from("<II", b, 11 + 274)
+              d = bytes(b[11 + 274 + 8: 11 + 274 + 8 + sz0])
+              h = -1
+              for k in range(0, min(sz0, 0x40000) - 0x30, 4):
+                  if d[k:k+4] == M and d[k+0x2C:k+0x30] == M:
+                      h = k; break
+              if h < 0:
+                  print(f, "en-tete introuvable"); continue
+              found = None
+              for k in range(h, min(h + 0x200, len(d) - 16), 4):
+                  A, B, C, D = struct.unpack_from("<4I", d, k)
+                  if 0x90000000 <= A < B <= 0x90800000 and 0x20000000 <= C < D <= 0x30000000:
+                      found = (A, B, C, D); print(f, "zone apps externes", [hex(x) for x in found], "a +", hex(k)); break
+              if not found:
+                  print(f, "zone des apps introuvable"); continue
+              A, B, C, D = found
+              out = "app." + slot + ".bin"
+              cmd = ["npx", "--yes", "--", "nwlink@1.0.0", "nwa-bin", "app.nwa", out]
+              if fo: cmd += [fo[0], hex(A)]
+              if ro: cmd += [ro[0], hex(C)]
+              print(" ".join(cmd))
+              r = subprocess.run(cmd, capture_output=True, text=True); print(r.stdout, r.stderr)
+              if r.returncode: continue
+              app = open(out, "rb").read()
+              print("taille app", len(app), "place disponible", B - A)
+              if len(app) > B - A:
+                  print("app trop grosse"); continue
+              el = struct.pack("<II", A, len(app)) + app
+              suffix = bytes(b[-16:]); body = bytearray(b[:-16]) + el
+              ts = struct.unpack_from("<I", body, 11 + 266)[0]; ne = struct.unpack_from("<I", body, 11 + 270)[0]
+              struct.pack_into("<I", body, 11 + 266, ts + len(el)); struct.pack_into("<I", body, 11 + 270, ne + 1)
+              ps = struct.unpack_from("<I", body, 6)[0]; struct.pack_into("<I", body, 6, ps + len(el))
+              open(f, "wb").write(bytes(body) + suffix); print(f, "mis a jour avec l'app")
+          PY
+      - name: Rassembler
+        run: |
+          mkdir -p out
+          find firmware \( -name "userland.*.dfu" -o -name "userland.*.bin" \) -exec cp {} out/ \;
+          ls -l out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: userland-n0120
+          path: out/*
+  site:
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+      - uses: actions/deploy-pages@v4
