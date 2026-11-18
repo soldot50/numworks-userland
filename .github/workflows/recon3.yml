@@ -1,0 +1,33 @@
+name: Reperer le format des apps (3)
+on:
+  workflow_dispatch:
+jobs:
+  recon:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Cloner, compiler l'exemple, extraire
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi make git
+          git clone --filter=blob:none https://github.com/numworks/epsilon.git firmware
+          cd firmware
+          {
+            echo "== nwlink aide"; npx --yes -- nwlink@1.0.0 --help 2>&1 | head -60
+            echo "== compilation exemple C (device)"
+            make -C epsilon/external_apps/sample_c PLATFORM=device 2>&1 | tail -25
+            echo "== fichiers produits"; find epsilon/external_apps/sample_c/output -type f | head -20
+            for f in $(find epsilon/external_apps/sample_c/output -name "*.nwa" | head -1); do
+              echo "== $f"; ls -l "$f"; file "$f"; arm-none-eabi-readelf -h "$f" 2>&1 | head -25; xxd "$f" | head -8
+            done
+            echo "== adresses des apps externes (scripts de liaison, userland)"
+            git grep -n -iE "external_apps|EXTERNAL_APPS|external apps" -- '*.ld' '*.ld.*' 'shared/ion/src/device' | head -50
+            echo "== userland header"; git ls-files | grep -iE "userland.*(header|\.ld)|slot" | head -20
+            echo "== docs apps externes"; sed -n 1,80p epsilon/external_apps/README.md
+          } > /tmp/recon3.txt 2>&1
+          wc -l /tmp/recon3.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recon3
+          path: /tmp/recon3.txt
