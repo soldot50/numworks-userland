@@ -60,6 +60,17 @@ jobs:
               f.write_text(s)
           print(n, "couleur(s) modifiee(s)")
           PY
+      - name: Garder les apps externes au demarrage
+        run: |
+          python3 - <<'PY'
+          p = "firmware/shared/ion/src/device/userland/drivers/external_apps.cpp"
+          s = open(p, encoding="utf-8").read()
+          sig = "void deleteApps(bool isExamModeActive, bool keepAfterCrash) {\n"
+          assert sig in s, "ERREUR : deleteApps introuvable"
+          s = s.replace(sig, sig + "  if (true) {\n    return;\n  }\n", 1)
+          open(p, "w", encoding="utf-8").write(s)
+          print("deleteApps desactive : les apps survivent au demarrage")
+          PY
       - name: Lancer Userland au demarrage
         if: ${{ inputs.autostart == 'oui' }}
         run: |
@@ -185,11 +196,12 @@ jobs:
                   addr = (addr + len(app) + 0xFFFF) & ~0xFFFF
               if n == 0:
                   continue
-              hdr = bytearray(b[:11 + 274])
-              struct.pack_into("<I", hdr, 11 + 266, len(els)); struct.pack_into("<I", hdr, 11 + 270, n)
-              struct.pack_into("<I", hdr, 6, len(hdr) + len(els))
-              open("firmware/apps." + slot + ".dfu", "wb").write(bytes(hdr) + els + bytes(b[-16:]))
-              print("firmware/apps." + slot + ".dfu cree :", n, "app(s)")
+              suffix = bytes(b[-16:]); body = bytearray(b[:-16]) + els
+              ts = struct.unpack_from("<I", body, 11 + 266)[0]; ne = struct.unpack_from("<I", body, 11 + 270)[0]
+              struct.pack_into("<I", body, 11 + 266, ts + len(els)); struct.pack_into("<I", body, 11 + 270, ne + n)
+              ps = struct.unpack_from("<I", body, 6)[0]; struct.pack_into("<I", body, 6, ps + len(els))
+              open(f, "wb").write(bytes(body) + suffix)
+              print(f, "mis a jour avec", n, "app(s)")
           PY
       - name: Rassembler
         run: |
