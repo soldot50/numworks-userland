@@ -290,10 +290,11 @@ static void tetris(void){
   }while(1);
 }
 
+static bool g_quit=false;
 static void jeux(bool nwa){
-  static const char*const it[]={"Jeux .nwa","Snake","Pong","2048","Simon","Tetris"}; int s=0; const char*const*L=nwa?it:it+1; int n=nwa?6:5; int o=nwa?0:1;
+  static const char*const it[]={"Jeux .nwa (liste)","Snake","Pong","2048","Simon","Tetris"}; int s=0; const char*const*L=nwa?it:it+1; int n=nwa?6:5; int o=nwa?0:1;
   for(;;){ s=menu(nwa?"Jeux":"Mini-jeux",L,n,"OK: lancer  Retour",s); if(s<0)return; s+=o;
-    if(s==0)message("Jeux .nwa","Les jeux .nwa s'installent depuis le site","NumWorks (page des applications) ou le","site d'installation du projet."); 
+    if(s==0){ g_quit=true; return; }
     else if(s==1)snake(); else if(s==2)pong(); else if(s==3)game2048(); else if(s==4)simon(); else tetris(); }}
 
 // =====================================================================
@@ -513,5 +514,5 @@ int main(int argc,char*argv[]){
   (void)argc;(void)argv; theme(); g_prev=eadk_keyboard_scan();
   static const char*const it[]={"Jeux","Mini-jeux","Bloc-notes","Horloge","Minuteur","Outils avances","Fichiers","Parametres","A propos"}; int s=0;
   for(;;){ s=menu("Accueil",it,9,"OK: ouvrir  Retour: quitter",s); if(s<0)return 0;
-    switch(s){ case 0: jeux(true); break; case 1: jeux(false); break; case 2: notepad(0); break; case 3: clock_(); break; case 4: timer_(); break; case 5: outils(); break; case 6: files(); break; case 7: settings(); break; default: about(); }
+    switch(s){ case 0: jeux(true); if(g_quit)return 0; break; case 1: jeux(false); break; case 2: notepad(0); break; case 3: clock_(); break; case 4: timer_(); break; case 5: outils(); break; case 6: files(); break; case 7: settings(); break; default: about(); }
   } }
