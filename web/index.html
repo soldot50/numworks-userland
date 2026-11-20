@@ -16,7 +16,7 @@ input,select{padding:.4rem;margin:.3rem 0}pre{background:#111;color:#8f8;padding
 <input type="file" id="dfu" accept=".dfu,.bin"><br>
 Version à forcer dans le fichier (facultatif, ex. 26.3.0) : <input id="forceV" size="10" placeholder="vide = ne rien changer"><br>
 <button id="flash">Installer</button></section>
-<section><small>Après un reset, la calculatrice revient au système officiel : il suffit de relancer cette page. Jeux .nwa : utilise la page officielle des apps de NumWorks.</small></section>
+<section><small><b>Installer Userland et les jeux .nwa :</b> 1) installe d'abord userland.X.dfu, 2) attends l'écran « La calculatrice est connectée » de TON userland, recharge cette page, connecte, puis installe apps.X.dfu (même lettre X). Il contient Userland + tous les .nwa du dossier nwa/ du dépôt. <br>Après un reset, la calculatrice revient au système officiel : il suffit de relancer cette page. Jeux .nwa : utilise la page officielle des apps de NumWorks.</small></section>
 <pre id="log"></pre>
 <script>
 const log=m=>{const l=document.getElementById('log');l.textContent+=m+"\n";l.scrollTop=l.scrollHeight};
@@ -98,9 +98,9 @@ document.getElementById('flash').onclick=async()=>{try{
   const b=new Uint8Array(await f.arrayBuffer()),v=new DataView(b.buffer);
   if(f.name.endsWith(".bin")){log("Fichier .bin brut : écriture à 0x"+start.toString(16));await writeAt(start,await adapt(b,start));await leave(start);return}
   if(String.fromCharCode(...b.slice(0,5))!=="DfuSe")throw new Error("Pas un fichier DfuSe");
-  let off=11;const targets=v.getUint8(10);
+  let off=11,first=null;const targets=v.getUint8(10);
   for(let t=0;t<targets;t++){const ne=v.getUint32(off+270,true);off+=274;
     for(let e=0;e<ne;e++){const a=v.getUint32(off,true),sz=v.getUint32(off+4,true);off+=8;
-      let d=b.slice(off,off+sz);if(a===start)d=await adapt(d,start);await writeAt(a,d);off+=sz}}
-  await leave(start)}catch(e){log("Erreur: "+e.message)}};
+      if(first===null)first=a;let d=b.slice(off,off+sz);if(a===start)d=await adapt(d,start);await writeAt(a,d);off+=sz}}
+  await leave(/^apps?\./.test(f.name)?first:start)}catch(e){log("Erreur: "+e.message)}};
 </script></body></html>
