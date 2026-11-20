@@ -6,6 +6,10 @@ on:
         description: "Version d Epsilon de ta calculatrice (Parametres > A propos)"
         default: "26.4.0"
         required: true
+      autostart:
+        description: "Lancer Userland au demarrage ? (oui/non) - mets non pour tester sans"
+        default: "non"
+        required: false
       commit:
         description: "Commit entre parentheses dans Parametres > A propos (ex: cc9262e)"
         default: "cc9262e"
@@ -57,6 +61,7 @@ jobs:
           print(n, "couleur(s) modifiee(s)")
           PY
       - name: Lancer Userland au demarrage
+        if: ${{ inputs.autostart == 'oui' }}
         run: |
           python3 - <<'PY'
           p = "firmware/epsilon/apps/home/controller.cpp"
