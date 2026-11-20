@@ -56,6 +56,34 @@ jobs:
               f.write_text(s)
           print(n, "couleur(s) modifiee(s)")
           PY
+      - name: Lancer Userland au demarrage
+        run: |
+          python3 - <<'PY'
+          p = "firmware/epsilon/apps/home/controller.cpp"
+          s = open(p, encoding="utf-8").read()
+          marker = "  if (event.type == ResponderChainEventType::HasBecomeFirst) {\n"
+          assert marker in s, "ERREUR : point d'accroche introuvable dans controller.cpp"
+          lines = [
+            "    static bool s_userlandAutoLaunched = false;",
+            "    if (!s_userlandAutoLaunched) {",
+            "      s_userlandAutoLaunched = true;",
+            "      AppsContainer* userlandContainer = AppsContainer::sharedAppsContainer();",
+            "      for (int i = 0; i < userlandContainer->numberOfExternalApps(); i++) {",
+            "        Ion::ExternalApps::App a = userlandContainer->externalAppAtIndex(i);",
+            "        const char* n = a.name();",
+            "        if (n != nullptr && strcmp(n, \"Userland\") == 0) {",
+            "          userlandContainer->switchToExternalApp(a);",
+            "          break;",
+            "        }",
+            "      }",
+            "    }",
+          ]
+          s = s.replace(marker, marker + "\n".join(lines) + "\n", 1)
+          if "#include <string.h>" not in s:
+              s = s.replace('extern "C" {\n#include <assert.h>', 'extern "C" {\n#include <assert.h>\n#include <string.h>', 1)
+          open(p, "w", encoding="utf-8").write(s)
+          print("controller.cpp modifie : Userland se lance au demarrage")
+          PY
       - name: Compilation
         env:
           V: ${{ inputs.version }}
@@ -98,27 +126,23 @@ jobs:
                       off += sz; i += 1
               open(f, "wb").write(bytes(b))
           PY
-      - name: Ajouter l'app Userland dans les .dfu
+      - name: Preparer les apps (.nwa) pour chaque emplacement
         run: |
-          if [ -f app.nwa ]; then
-            echo "Utilisation du app.nwa fourni dans le depot"
-          elif [ -f app/src/main.c ]; then
+          if [ -f app/src/main.c ]; then
             cp app/src/main.c firmware/epsilon/external_apps/sample_c/src/main.c
             make -C firmware/epsilon/external_apps/sample_c PLATFORM=device
             cp firmware/epsilon/external_apps/sample_c/output/device/app.nwa app.nwa
+          elif [ -f app.nwa ]; then
+            echo "Utilisation du app.nwa fourni dans le depot"
           else
-            echo "ERREUR : ni app.nwa a la racine, ni app/src/main.c dans le depot"
-            exit 1
+            echo "ERREUR : ni app/src/main.c ni app.nwa dans le depot"; exit 1
           fi
-          ls -l app.nwa
-          npx --yes -- nwlink@1.0.0 nwa-bin --help | tee nwhelp.txt
+          ls -l app.nwa; ls -l nwa 2>/dev/null || echo "(pas de dossier nwa/)"
           python3 - <<'PY'
           import struct, glob, subprocess, re
-          help_ = open("nwhelp.txt").read()
-          fo = re.findall(r"--[a-z-]*flash[a-z-]*", help_)
-          ro = re.findall(r"--[a-z-]*ram[a-z-]*", help_)
-          print("options flash:", fo, "ram:", ro)
           M = bytes([0xFE, 0xED, 0xC0, 0xDE])
+          nwas = ["app.nwa"] + sorted(glob.glob("nwa/*.nwa"))
+          print("apps a installer :", nwas)
           for f in sorted(glob.glob("firmware/**/userland.*.dfu", recursive=True)):
               slot = re.search(r"userland\.([AB])\.dfu", f).group(1)
               b = bytearray(open(f, "rb").read())
@@ -134,32 +158,38 @@ jobs:
               for k in range(h, min(h + 0x200, len(d) - 16), 4):
                   A, B, C, D = struct.unpack_from("<4I", d, k)
                   if 0x90000000 <= A < B <= 0x90800000 and 0x20000000 <= C < D <= 0x30000000:
-                      found = (A, B, C, D); print(f, "zone apps externes", [hex(x) for x in found], "a +", hex(k)); break
+                      found = (A, B, C, D); break
               if not found:
                   print(f, "zone des apps introuvable"); continue
               A, B, C, D = found
-              out = "app." + slot + ".bin"
-              cmd = ["npx", "--yes", "--", "nwlink@1.0.0", "nwa-bin", "app.nwa", out]
-              if fo: cmd += [fo[0], hex(A)]
-              if ro: cmd += [ro[0], hex(C)]
-              print(" ".join(cmd))
-              r = subprocess.run(cmd, capture_output=True, text=True); print(r.stdout, r.stderr)
-              if r.returncode: continue
-              app = open(out, "rb").read()
-              print("taille app", len(app), "place disponible", B - A)
-              if len(app) > B - A:
-                  print("app trop grosse"); continue
-              el = struct.pack("<II", A, len(app)) + app
-              suffix = bytes(b[-16:]); body = bytearray(b[:-16]) + el
-              ts = struct.unpack_from("<I", body, 11 + 266)[0]; ne = struct.unpack_from("<I", body, 11 + 270)[0]
-              struct.pack_into("<I", body, 11 + 266, ts + len(el)); struct.pack_into("<I", body, 11 + 270, ne + 1)
-              ps = struct.unpack_from("<I", body, 6)[0]; struct.pack_into("<I", body, 6, ps + len(el))
-              open(f, "wb").write(bytes(body) + suffix); print(f, "mis a jour avec l'app")
+              print(f, "zone apps externes", [hex(x) for x in found])
+              addr = A; els = b""; n = 0
+              for nw in nwas:
+                  cmd = ["npx", "--yes", "--", "nwlink@1.0.0", "nwa-bin", nw, "tmp.bin",
+                         "--flash-start", hex(addr), "--flash-length", hex(B - addr),
+                         "--ram-start", hex(C), "--ram-length", hex(D - C),
+                         "--trampoline-start", hex(a0 + 0x30)]
+                  r = subprocess.run(cmd, capture_output=True, text=True)
+                  if r.returncode:
+                      print("ECHEC nwlink pour", nw, r.stderr[-300:]); continue
+                  app = open("tmp.bin", "rb").read()
+                  if addr + len(app) > B:
+                      print("plus de place pour", nw); break
+                  els += struct.pack("<II", addr, len(app)) + app; n += 1
+                  print(" ", nw, "->", hex(addr), len(app), "octets")
+                  addr = (addr + len(app) + 0xFFFF) & ~0xFFFF
+              if n == 0:
+                  continue
+              hdr = bytearray(b[:11 + 274])
+              struct.pack_into("<I", hdr, 11 + 266, len(els)); struct.pack_into("<I", hdr, 11 + 270, n)
+              struct.pack_into("<I", hdr, 6, len(hdr) + len(els))
+              open("firmware/apps." + slot + ".dfu", "wb").write(bytes(hdr) + els + bytes(b[-16:]))
+              print("firmware/apps." + slot + ".dfu cree :", n, "app(s)")
           PY
       - name: Rassembler
         run: |
           mkdir -p out
-          find firmware \( -name "userland.*.dfu" -o -name "userland.*.bin" \) -exec cp {} out/ \;
+          find firmware \( -name "userland.*.dfu" -o -name "userland.*.bin" -o -name "apps.?.dfu" \) -exec cp {} out/ \;
           ls -l out
       - uses: actions/upload-artifact@v4
         with:
