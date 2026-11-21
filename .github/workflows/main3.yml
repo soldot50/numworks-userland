@@ -196,6 +196,11 @@ jobs:
                   addr = (addr + len(app) + 0xFFFF) & ~0xFFFF
               if n == 0:
                   continue
+              hdr = bytearray(b[:11 + 274])
+              struct.pack_into("<I", hdr, 11 + 266, len(els)); struct.pack_into("<I", hdr, 11 + 270, n)
+              struct.pack_into("<I", hdr, 6, len(hdr) + len(els))
+              open("firmware/apps." + slot + ".dfu", "wb").write(bytes(hdr) + els + bytes(b[-16:]))
+              print("firmware/apps." + slot + ".dfu cree")
               suffix = bytes(b[-16:]); body = bytearray(b[:-16]) + els
               ts = struct.unpack_from("<I", body, 11 + 266)[0]; ne = struct.unpack_from("<I", body, 11 + 270)[0]
               struct.pack_into("<I", body, 11 + 266, ts + len(els)); struct.pack_into("<I", body, 11 + 270, ne + n)
