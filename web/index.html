@@ -16,7 +16,7 @@ input,select{padding:.4rem;margin:.3rem 0}pre{background:#111;color:#8f8;padding
 <input type="file" id="dfu" accept=".dfu,.bin"><br>
 Version à forcer dans le fichier (facultatif, ex. 26.3.0) : <input id="forceV" size="10" placeholder="vide = ne rien changer"><br>
 <button id="flash">Installer</button></section>
-<section><small><b>Un seul fichier :</b> installe userland.X.dfu (il contient déjà Userland et les .nwa du dossier nwa/). Puis appuie sur OK à l'écran « UNOFFICIAL SOFTWARE ».<br>Après un reset, la calculatrice revient au système officiel : il suffit de relancer cette page. Jeux .nwa : utilise la page officielle des apps de NumWorks.</small></section>
+<section><small><b>1)</b> installe userland.X.dfu, appuie sur OK à « UNOFFICIAL SOFTWARE ». <b>2)</b> Si l'app Userland n'est pas à la fin du menu : branche l'USB (écran « La calculatrice est connectée »), recharge cette page, connecte, installe apps.X.dfu (même X).<br>Après un reset, la calculatrice revient au système officiel : il suffit de relancer cette page. Jeux .nwa : utilise la page officielle des apps de NumWorks.</small></section>
 <pre id="log"></pre>
 <script>
 const log=m=>{const l=document.getElementById('log');l.textContent+=m+"\n";l.scrollTop=l.scrollHeight};
